@@ -1,0 +1,3 @@
+name,email,phone,company,service,message,priority,estimated_value,source
+John Doe,john.doe@example.com,1234567890,ACME Corp,Web Development,"Interested in a new website.",high,5000,website
+Jane Smith,jane.smith@example.com,0987654321,Smith & Co,Marketing,"Looking for marketing services.",medium,2500,referral

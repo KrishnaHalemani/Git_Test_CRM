@@ -1,0 +1,872 @@
+<?php
+
+if (session_status() !== PHP_SESSION_ACTIVE) session_start();
+include 'db.php';
+
+// Require superadmin role
+require_role(['superadmin']);
+
+$counts = getDashboardCounts();
+$recent = getRecentActivities(15);
+$admins = getAdmins();
+$users = getAllUsers(500);
+$leads = getLeads(null, 'admin'); // all leads for admins
+
+// Fetch branches (companies table used as branches)
+$branches = [];
+try {
+    if (isset($db_type) && $db_type === 'pdo') {
+        $stmt = $pdo->query("SELECT * FROM companies ORDER BY name ASC");
+        $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        $res = $conn->query("SELECT * FROM companies ORDER BY name ASC");
+        while ($row = $res->fetch_assoc()) {
+            $branches[] = $row;
+        }
+    }
+} catch (Exception $e) {
+    // ignore branch fetch errors; leave $branches empty
+}
+
+// Prepare chart data for analytics (demo fallback)
+
+// Get dynamic dashboard stats for charts
+$stats = getDashboardStats();
+$monthlyData = $stats['monthly_data'];
+
+// Prepare JS arrays for Chart.js
+$monthLabels = array_map(function($m) {
+    return date('M Y', strtotime($m['month'] . '-01'));
+}, $monthlyData);
+$monthlyLeads = array_map(function($m) { return $m['created']; }, $monthlyData);
+$monthlyConverted = array_map(function($m) { return $m['converted']; }, $monthlyData);
+$revenueData = array_map(function($m) { return $m['created'] * 2500; }, $monthlyData);
+
+// Lead source breakdown (dynamic)
+
+$sourceData = [];
+if (isset($db_type) && $db_type === 'pdo') {
+    $stmt = $pdo->query("SELECT source, COUNT(*) as c FROM leads GROUP BY source");
+    foreach($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $sourceData[$row['source']] = (int)$row['c'];
+    }
+} else {
+    $res = $conn->query("SELECT source, COUNT(*) as c FROM leads GROUP BY source");
+    while($row = $res->fetch_assoc()) {
+        $sourceData[$row['source']] = (int)$row['c'];
+    }
+}
+$sourceLabels = array_map(function($k){return ucfirst($k);}, array_keys($sourceData));
+$sourceDataArr = array_values($sourceData);
+if (!isset($sourceLabels)) $sourceLabels = [];
+if (!isset($sourceDataArr)) $sourceDataArr = [];
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Admin Dashboard - CRM Pro</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Dynamic chart data from PHP
+        const monthLabels = <?php echo json_encode($monthLabels); ?>;
+        const monthlyLeads = <?php echo json_encode($monthlyLeads); ?>;
+        const monthlyConverted = <?php echo json_encode($monthlyConverted); ?>;
+        const revenueData = <?php echo json_encode($revenueData); ?>;
+        const sourceLabels = <?php echo json_encode(array_map(function($k){return ucfirst($k);}, array_keys($sourceData))); ?>;
+        const sourceDataArr = <?php echo json_encode(array_values($sourceData)); ?>;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            new Chart(document.getElementById('leadsChart'), {
+                type: 'line',
+                data: {
+                    labels: monthLabels,
+                    datasets: [
+                        {
+                            label: 'Leads Created',
+                            data: monthlyLeads,
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#667eea'
+                        },
+                        {
+                            label: 'Leads Converted',
+                            data: monthlyConverted,
+                            borderColor: '#48bb78',
+                            backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#48bb78'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+
+            new Chart(document.getElementById('revenueChart'), {
+                type: 'bar',
+                data: {
+                    labels: monthLabels,
+                    datasets: [{
+                        label: 'Revenue (₹)',
+                        data: revenueData,
+                        backgroundColor: 'rgba(72, 187, 120, 0.3)',
+                        borderColor: '#48bb78',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+
+            new Chart(document.getElementById('sourceChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: sourceLabels,
+                    datasets: [{
+                        data: sourceDataArr,
+                        backgroundColor: ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#fed7aa']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '60%',
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        });
+    </script>
+</head>
+<body>
+        <div class="container-fluid py-4">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1 class="m-0"><i class="fas fa-chart-pie me-2"></i>Super Admin Dashboard</h1>
+                <div>
+                    <button class="btn btn-outline-secondary" onclick="location.reload()"><i class="fas fa-sync me-1"></i>Refresh</button>
+                    <a href="logout.php" class="btn btn-outline-danger ms-2"><i class="fas fa-sign-out-alt me-1"></i>Logout</a>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-3"><div class="card text-center"><div class="card-body"><h6 class="text-muted">Total Leads</h6><h3 class="text-primary"><?php echo $counts['total_leads'] ?? 0; ?></h3></div></div></div>
+                <div class="col-md-3"><div class="card text-center"><div class="card-body"><h6 class="text-muted">New Leads</h6><h3 class="text-success"><?php echo $counts['new_leads'] ?? 0; ?></h3></div></div></div>
+                <div class="col-md-3"><div class="card text-center"><div class="card-body"><h6 class="text-muted">Hot Leads</h6><h3 class="text-danger"><?php echo $counts['hot_leads'] ?? 0; ?></h3></div></div></div>
+                <div class="col-md-3"><div class="card text-center"><div class="card-body"><h6 class="text-muted">Converted</h6><h3 class="text-info"><?php echo $counts['converted_leads'] ?? 0; ?></h3></div></div></div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-lg-8">
+                    <div class="chart-container">
+                        <h5>Lead Trends (Last 6 Months)</h5>
+                        <canvas id="leadsChart" height="80"></canvas>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="chart-container">
+                        <h5>Lead Sources</h5>
+                        <canvas id="sourceChart" height="80"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-lg-12">
+                    <div class="chart-container">
+                        <h5>Revenue Projection</h5>
+                        <canvas id="revenueChart" height="60"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <main class="container-fluid">
+        <section id="recent" class="mb-5">
+            <h3><i class="fas fa-history me-2"></i>Recent Activities</h3>
+            <div class="list-group">
+                <?php foreach($recent as $act): ?>
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between">
+                            <div>
+                                <strong><?php echo htmlspecialchars($act['user_name'] ?? 'System'); ?></strong>
+                                <span class="text-muted"><?php echo htmlspecialchars($act['activity_type'] ?? ''); ?></span>
+                                <div><?php echo htmlspecialchars($act['title'] ?? ''); ?></div>
+                            </div>
+                            <div class="text-muted small"><?php echo htmlspecialchars($act['activity_date']); ?></div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+
+        <section id="admins" class="mb-5">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h3 class="m-0">Admin Management</h3>
+                <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addAdminModal">
+                    <i class="fas fa-plus me-2"></i>Add Admin
+                </button>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-6"><input type="text" class="form-control" id="adminSearch" placeholder="Search by name, email, phone..."></div>
+                <div class="col-md-3">
+                    <select class="form-select" id="adminBranchFilter">
+                        <option value="">All Branches</option>
+                        <?php 
+                        $branchNames = array_unique(array_map(function($a) { return $a['branch'] ?? $a['name'] ?? ''; }, $admins));
+                        foreach(array_filter($branchNames) as $branch) {
+                            echo '<option value="' . htmlspecialchars($branch) . '">' . htmlspecialchars($branch) . '</option>';
+                        }
+                        ?>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select" id="adminStatusFilter"><option value="">All Status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover" id="adminsTable">
+                    <thead class="table-light"><tr><th>Name & Email</th><th>Contact</th><th>Branch</th><th>Status</th><th>Actions</th></tr></thead>
+                    <tbody>
+                        <?php foreach($admins as $a): ?>
+                        <tr class="admin-row" data-name="<?php echo htmlspecialchars($a['full_name'] ?? $a['username']); ?>" data-email="<?php echo htmlspecialchars($a['email']); ?>" data-phone="<?php echo htmlspecialchars($a['phone'] ?? ''); ?>" data-branch="<?php echo htmlspecialchars($a['branch'] ?? ''); ?>" data-status="<?php echo htmlspecialchars($a['status']); ?>">
+                            <td>
+                                <div class="d-flex align-items-center">
+                                    <div class="avatar bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;font-weight:bold;margin-right:10px;"><?php echo strtoupper(substr($a['username'], 0, 1)); ?></div>
+                                    <div><strong><?php echo htmlspecialchars($a['full_name'] ?? $a['username']); ?></strong><div class="text-muted small"><?php echo htmlspecialchars($a['email']); ?></div></div>
+                                </div>
+                            </td>
+                            <td><div><?php echo htmlspecialchars($a['phone'] ?? 'N/A'); ?></div><small class="text-muted">ID: <?php echo htmlspecialchars($a['id']); ?></small></td>
+                            <td><?php echo htmlspecialchars($a['branch'] ?? 'Main'); ?></td>
+                            <td><span class="badge <?php echo ($a['status']==='active') ? 'bg-success' : 'bg-warning'; ?>"><?php echo ucfirst($a['status']); ?></span></td>
+                            <td>
+                                <button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#editAdminModal" onclick="editAdminPrepare(<?php echo htmlspecialchars(json_encode($a)); ?>)"><i class="fas fa-edit"></i></button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteAdminConfirm(<?php echo $a['id']; ?>)"><i class="fas fa-trash"></i></button>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <div class="text-muted small mt-2">Showing <strong id="adminCount"><?php echo count($admins); ?></strong> admin(s)</div>
+        </section>
+
+        <section id="users" class="mb-5">
+            <div class="d-flex justify-content-between align-items-center mb-4"><h3 class="m-0">User Management</h3></div>
+            <div class="mb-3 text-end"><button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addUserModal"><i class="fas fa-user-plus me-2"></i>Add User</button></div>
+
+            <div class="row mb-3">
+                <div class="col-md-6"><input type="text" class="form-control" id="userSearch" placeholder="Search by name, email, role..."></div>
+                <div class="col-md-3"><select class="form-select" id="userRoleFilter"><option value="">All Roles</option><option value="user">User</option><option value="admin">Admin</option></select></div>
+                <div class="col-md-3"><select class="form-select" id="userStatusFilter"><option value="">All Status</option><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover" id="usersTable">
+                    <thead class="table-light"><tr><th>Name & Email</th><th>Role</th><th>Branch</th><th>Status</th><th>Actions</th></tr></thead>
+                    <tbody>
+                        <?php foreach($users as $u): ?>
+                        <tr class="user-row" data-name="<?php echo htmlspecialchars($u['full_name'] ?? $u['username']); ?>" data-email="<?php echo htmlspecialchars($u['email']); ?>" data-role="<?php echo htmlspecialchars($u['role']); ?>" data-status="<?php echo htmlspecialchars($u['status']); ?>">
+                            <td>
+                                <div class="d-flex align-items-center">
+                                    <div class="avatar bg-info text-white rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;font-weight:bold;margin-right:10px;"><?php echo strtoupper(substr($u['username'] ?? 'U', 0, 1)); ?></div>
+                                    <div><strong><?php echo htmlspecialchars($u['full_name'] ?? $u['username']); ?></strong><div class="text-muted small"><?php echo htmlspecialchars($u['email']); ?></div></div>
+                                </div>
+                            </td>
+                            <td><span class="badge bg-secondary"><?php echo ucfirst($u['role']); ?></span></td>
+                            <td><?php echo htmlspecialchars($u['branch'] ?? 'N/A'); ?></td>
+                            <td><span class="badge <?php echo ($u['status']==='active') ? 'bg-success' : 'bg-warning'; ?>"><?php echo ucfirst($u['status']); ?></span></td>
+                            <td>
+                                <button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#userProfileModal" onclick="viewUserProfile(<?php echo htmlspecialchars(json_encode($u)); ?>)"><i class="fas fa-eye"></i> View</button>
+                                <button class="btn btn-sm <?php echo ($u['status']==='active') ? 'btn-warning' : 'btn-success'; ?>" onclick="toggleUserStatus(<?php echo $u['id']; ?>, '<?php echo $u['status']; ?>')"><?php echo ($u['status']==='active') ? '<i class="fas fa-ban"></i> Deactivate' : '<i class="fas fa-check"></i> Activate'; ?></button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteUserConfirm(<?php echo $u['id']; ?>)"><i class="fas fa-trash"></i></button>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <div class="text-muted small mt-2">Showing <strong id="userCount"><?php echo count($users); ?></strong> user(s)</div>
+        </section>
+
+        <section id="settings" class="mb-5">
+            <h3>Settings</h3>
+            <?php
+            $company_name = getSetting('company_name', 'CRM Pro');
+            $company_email = getSetting('company_email', 'hello@crmPro.com');
+            $company_phone = getSetting('company_phone', '+1 (555) 123-4567');
+            $logo = getSetting('company_logo', '');
+            $theme = getSetting('theme_color', '#667eea');
+            ?>
+
+            <form method="POST" action="settings_actions.php" enctype="multipart/form-data" class="row g-3">
+                <div class="col-md-6"><label class="form-label">Company Name</label><input name="company_name" class="form-control" value="<?php echo htmlspecialchars($company_name); ?>"></div>
+                <div class="col-md-6"><label class="form-label">Company Email</label><input name="company_email" class="form-control" value="<?php echo htmlspecialchars($company_email); ?>"></div>
+                <div class="col-md-6"><label class="form-label">Company Phone</label><input name="company_phone" class="form-control" value="<?php echo htmlspecialchars($company_phone); ?>"></div>
+                <div class="col-md-6"><label class="form-label">Theme Color</label><input type="color" name="theme_color" class="form-control form-control-color" value="<?php echo htmlspecialchars($theme); ?>"></div>
+                <div class="col-md-6"><label class="form-label">Logo (PNG/JPG)</label><input type="file" name="company_logo" class="form-control"></div>
+                <div class="col-md-6"><label class="form-label">Logo Preview</label><div><?php if ($logo): ?><img id="logoPreview" src="<?php echo htmlspecialchars($logo); ?>" alt="logo" style="max-height:80px"><?php else: ?><div id="logoPreview" style="height:80px;line-height:80px;background:#f1f1f1;text-align:center;color:#777;">No logo</div><?php endif; ?></div></div>
+                <div class="col-12"><button class="btn btn-primary">Save Settings</button></div>
+            </form>
+        </section>
+
+        <section id="permissions" class="mb-5">
+            <h3><i class="fas fa-lock me-2"></i>Role Permissions & Access Control</h3>
+            <p class="text-muted">Configure which features are available to each role.</p>
+            <div class="card"><div class="card-body"><div class="table-responsive"><table class="table table-bordered"><thead class="table-light"><tr><th>Feature</th><th class="text-center">User</th><th class="text-center">Admin</th><th class="text-center">Super Admin</th><th>Description</th></tr></thead><tbody>
+                <tr class="table-active"><td colspan="5"><strong>Lead Management</strong></td></tr>
+                <tr><td>View Own Leads</td><td class="text-center"><i class="fas fa-check text-success"></i></td><td class="text-center"><i class="fas fa-check text-success"></i></td><td class="text-center"><i class="fas fa-check text-success"></i></td><td class="text-muted small">Users can view leads assigned to them</td></tr>
+            </tbody></table></div><div class="alert alert-info mt-3"><i class="fas fa-info-circle me-2"></i><strong>Note:</strong> These permissions are enforced at the server level.</div></div></div>
+        </section>
+
+    </main>
+</div>
+
+<!-- Add Admin Modal -->
+<div class="modal fade" id="addAdminModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="admin_actions.php">
+        <input type="hidden" name="action" value="create_admin">
+        <div class="modal-header bg-success text-white">
+            <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Add New Admin</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">Username</label><input class="form-control" name="username" required></div>
+            <div class="mb-3"><label class="form-label">Full Name</label><input class="form-control" name="full_name"></div>
+            <div class="mb-3"><label class="form-label">Email</label><input class="form-control" name="email" type="email" required></div>
+            <div class="mb-3"><label class="form-label">Phone</label><input class="form-control" name="phone"></div>
+            <div class="mb-3"><label class="form-label">Branch</label><select class="form-control" name="branch" required><option value="">Select Branch</option><?php foreach($branches as $b): ?><option value="<?php echo htmlspecialchars($b['name']); ?>"><?php echo htmlspecialchars($b['name']); ?></option><?php endforeach; ?></select></div>
+            <div class="mb-3"><label class="form-label">Password</label><input class="form-control" name="password" type="password" required></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-success"><i class="fas fa-save me-2"></i>Create Admin</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Admin Modal -->
+<div class="modal fade" id="editAdminModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="admin_actions.php">
+        <input type="hidden" name="action" value="update_admin">
+        <input type="hidden" name="id" id="editAdminId">
+        <div class="modal-header bg-info text-white">
+            <h5 class="modal-title"><i class="fas fa-user-edit me-2"></i>Edit Admin</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">Username</label><input class="form-control" id="editAdminUsername" readonly></div>
+            <div class="mb-3"><label class="form-label">Full Name</label><input class="form-control" name="full_name" id="editAdminFullName"></div>
+            <div class="mb-3"><label class="form-label">Email</label><input class="form-control" name="email" type="email" id="editAdminEmail"></div>
+            <div class="mb-3"><label class="form-label">Phone</label><input class="form-control" name="phone" id="editAdminPhone"></div>
+            <div class="mb-3"><label class="form-label">Branch</label><select class="form-control" name="branch" id="editAdminBranch" required><option value="">Select Branch</option><?php foreach($branches as $b): ?><option value="<?php echo htmlspecialchars($b['name']); ?>"><?php echo htmlspecialchars($b['name']); ?></option><?php endforeach; ?></select></div>
+            <div class="alert alert-info small"><i class="fas fa-info-circle"></i> Leave password blank to keep current</div>
+            <div class="mb-3"><label class="form-label">New Password (optional)</label><input class="form-control" name="password" type="password" id="editAdminPassword"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-info"><i class="fas fa-save me-2"></i>Update Admin</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- User Profile Modal -->
+<div class="modal fade" id="userProfileModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title"><i class="fas fa-user me-2"></i>User Profile</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col-md-6">
+            <h6 class="fw-bold text-muted">Personal Information</h6>
+            <div class="mb-3"><label class="form-label">Full Name</label><input type="text" class="form-control" id="userProfileFullName" readonly></div>
+            <div class="mb-3"><label class="form-label">Email</label><input type="email" class="form-control" id="userProfileEmail" readonly></div>
+            <div class="mb-3"><label class="form-label">Phone</label><input type="text" class="form-control" id="userProfilePhone" readonly></div>
+          </div>
+          <div class="col-md-6">
+            <h6 class="fw-bold text-muted">Account Information</h6>
+            <div class="mb-3"><label class="form-label">Role</label><input type="text" class="form-control" id="userProfileRole" readonly></div>
+            <div class="mb-3"><label class="form-label">Status</label><span class="badge" id="userProfileStatusBadge" style="font-size:1em;"></span></div>
+            <div class="mb-3"><label class="form-label">Branch</label><input type="text" class="form-control" id="userProfileBranch" readonly></div>
+          </div>
+        </div>
+        <div class="alert alert-light"><small><strong>Created:</strong> <span id="userProfileCreated"></span></small></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div>
+  </div>
+</div>
+
+    <!-- Add User Modal -->
+    <div class="modal fade" id="addUserModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="POST" action="admin_actions.php">
+                    <input type="hidden" name="action" value="create_user">
+                    <div class="modal-header bg-success text-white">
+                            <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Add New User</h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                            <div class="mb-3"><label class="form-label">Username</label><input class="form-control" name="username" required></div>
+                            <div class="mb-3"><label class="form-label">Full Name</label><input class="form-control" name="full_name"></div>
+                            <div class="mb-3"><label class="form-label">Email</label><input class="form-control" name="email" type="email" required></div>
+                            <div class="mb-3"><label class="form-label">Phone</label><input class="form-control" name="phone"></div>
+                            <div class="mb-3"><label class="form-label">Branch</label><select class="form-control" name="branch" required><option value="">Select Branch</option><?php foreach($branches as $b): ?><option value="<?php echo htmlspecialchars($b['name']); ?>"><?php echo htmlspecialchars($b['name']); ?></option><?php endforeach; ?></select></div>
+                            <div class="mb-3"><label class="form-label">Password</label><input class="form-control" name="password" type="password" required></div>
+                    </div>
+                    <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-success"><i class="fas fa-save me-2"></i>Create User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+    // Dynamic chart data from PHP
+    const monthLabels = <?php echo json_encode($monthLabels); ?>;
+    const monthlyLeads = <?php echo json_encode($monthlyLeads); ?>;
+    const monthlyConverted = <?php echo json_encode($monthlyConverted); ?>;
+    const revenueData = <?php echo json_encode($revenueData); ?>;
+    const sourceLabels = <?php echo json_encode($sourceLabels); ?>;
+    const sourceDataArr = <?php echo json_encode($sourceDataArr); ?>;
+
+    window.leadsChart = new Chart(document.getElementById('leadsChart'), {
+        type: 'line',
+        data: {
+            labels: monthLabels,
+            datasets: [
+                {
+                    label: 'Leads Created',
+                    data: monthlyLeads,
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#667eea'
+                },
+                {
+                    label: 'Leads Converted',
+                    data: monthlyConverted,
+                    borderColor: '#48bb78',
+                    backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#48bb78'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true }
+            },
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+
+    window.revenueChart = new Chart(document.getElementById('revenueChart'), {
+        type: 'bar',
+        data: {
+            labels: monthLabels,
+            datasets: [{
+                label: 'Revenue (₹)',
+                data: revenueData,
+                backgroundColor: 'rgba(72, 187, 120, 0.3)',
+                borderColor: '#48bb78',
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+
+    window.sourceChart = new Chart(document.getElementById('sourceChart'), {
+        type: 'doughnut',
+        data: {
+            labels: sourceLabels,
+            datasets: [{
+                data: sourceDataArr,
+                backgroundColor: ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#fed7aa']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '60%',
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+    </script>
+</body>
+</html>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning"><i class="fas fa-save me-2"></i>Update Branch</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function showEditBranchModal(id, name) {
+    document.getElementById('editBranchId').value = id;
+    document.getElementById('editBranchName').value = name;
+    var modal = new bootstrap.Modal(document.getElementById('editBranchModal'));
+    modal.show();
+}
+</script>
+
+<script>
+// Refresh dashboard charts via AJAX
+function refreshDashboardCharts() {
+    fetch('api/dashboard_stats.php', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        // Update Chart.js instances
+        if(window.leadsChart && window.revenueChart && window.sourceChart) {
+            leadsChart.data.labels = data.monthLabels;
+            leadsChart.data.datasets[0].data = data.monthlyLeads;
+            if(leadsChart.data.datasets[1]) {
+                leadsChart.data.datasets[1].data = data.monthlyConverted;
+            }
+            leadsChart.update();
+
+            revenueChart.data.labels = data.monthLabels;
+            revenueChart.data.datasets[0].data = data.revenueData;
+            revenueChart.update();
+
+            sourceChart.data.labels = data.sourceLabels;
+            sourceChart.data.datasets[0].data = data.sourceDataArr;
+            sourceChart.update();
+        }
+    });
+}
+
+// AJAX create branch
+document.getElementById('createBranchForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var form = e.target;
+    var fd = new FormData(form);
+    fd.append('ajax', '1');
+    fetch(location.href, { method: 'POST', body: fd }).then(r=>r.json()).then(data=>{
+        if(data.success){
+            // add option to all branch selects
+            var selects = document.querySelectorAll('select[name="branch"]');
+            selects.forEach(function(s){
+                var opt = document.createElement('option');
+                opt.value = data.name;
+                opt.textContent = data.name;
+                s.appendChild(opt);
+                s.value = data.name;
+            });
+
+            // add row to branches table
+            var tbody = document.getElementById('branchesTableBody');
+            if(tbody){
+                var tr = document.createElement('tr');
+                tr.id = 'branch-row-' + data.id;
+                tr.innerHTML = '<td>'+escapeHtml(data.name)+'</td>' +
+                    '<td><form method="POST" class="d-inline branch-delete-form"><input type="hidden" name="branch_id" value="'+data.id+'"><input type="hidden" name="branch_action" value="delete_branch"><button type="submit" class="btn btn-sm btn-danger" onclick="return confirm(\'Delete branch?\');"><i class="fas fa-trash"></i></button></form> <button class="btn btn-sm btn-warning" onclick="showEditBranchModal('+data.id+', \'"+escapeJs(data.name)+"\')"><i class="fas fa-edit"></i></button></td>';
+                tbody.appendChild(tr);
+            }
+
+            // close modal
+            var modalEl = document.getElementById('createBranchModal');
+            var modal = bootstrap.Modal.getInstance(modalEl);
+            modal.hide();
+
+            // clear form
+            form.reset();
+
+            // Refresh charts
+            refreshDashboardCharts();
+        } else {
+            alert('Error: '+(data.error||'Could not create branch'));
+        }
+    }).catch(err=>{ alert('Network error'); });
+});
+
+// AJAX edit branch
+document.getElementById('editBranchForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    var form = e.target;
+    var fd = new FormData(form);
+    fd.append('ajax', '1');
+    fetch(location.href, { method: 'POST', body: fd }).then(r=>r.json()).then(data=>{
+        if(data.success){
+            // update option values in selects
+            var selects = document.querySelectorAll('select[name="branch"]');
+            selects.forEach(function(s){
+                for(var i=0;i<s.options.length;i++){
+                    if(s.options[i].value === data.name || s.options[i].value === s.options[i].value){ /* noop to avoid lint */ }
+                }
+            });
+
+            // update branch row
+            var row = document.getElementById('branch-row-' + data.id);
+            if(row) row.children[0].textContent = data.name;
+
+            var modalEl = document.getElementById('editBranchModal');
+            var modal = bootstrap.Modal.getInstance(modalEl);
+            modal.hide();
+
+            // Refresh charts
+            refreshDashboardCharts();
+        } else {
+            alert('Error: '+(data.error||'Could not update branch'));
+        }
+    }).catch(err=>{ alert('Network error'); });
+});
+
+// Helper escape functions
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\'/g,'&#39;'); }
+function escapeJs(s){ return String(s).replace(/\\/g,'\\\\').replace(/'/g,'\\\'').replace(/"/g,'\\"'); }
+
+// Intercept delete forms to do AJAX delete and remove row
+document.addEventListener('submit', function(e){
+    if(e.target && e.target.classList && e.target.classList.contains('branch-delete-form')){
+        e.preventDefault();
+        if(!confirm('Delete branch?')) return;
+        var form = e.target;
+        var fd = new FormData(form);
+        fd.append('ajax','1');
+        fetch(location.href, { method:'POST', body: fd }).then(r=>r.json()).then(data=>{
+            if(data.success){
+                var row = document.getElementById('branch-row-' + (fd.get('branch_id')));
+                if(row) row.remove();
+                // remove from selects
+                document.querySelectorAll('select[name="branch"]').forEach(function(s){
+                    for(var i=s.options.length-1;i>=0;i--){ if(s.options[i].value === fd.get('branch_id') || s.options[i].value === fd.get('branch_id')){ s.remove(i); } }
+                });
+
+                // Refresh charts
+                refreshDashboardCharts();
+            } else {
+                alert('Error deleting branch');
+            }
+        }).catch(()=>alert('Network error'));
+    }
+});
+</script>
+</script>
+                    <div class="mb-3">
+                        <label class="form-label">Status *</label>
+                        <select class="form-control" id="editStatus" name="status" required>
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password <small>(leave blank to keep current)</small></label>
+                        <input type="password" class="form-control" name="password">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning"><i class="fas fa-save me-2"></i>Update User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+// Dynamic chart data from PHP
+const monthLabels = <?php echo json_encode($monthLabels); ?>;
+const monthlyLeads = <?php echo json_encode($monthlyLeads); ?>;
+const monthlyConverted = <?php echo json_encode($monthlyConverted); ?>;
+const revenueData = <?php echo json_encode($revenueData); ?>;
+const sourceLabels = <?php echo json_encode(array_map(function($k){return ucfirst($k);}, array_keys($sourceData))); ?>;
+const sourceDataArr = <?php echo json_encode(array_values($sourceData)); ?>;
+
+window.leadsChart = new Chart(document.getElementById('leadsChart'), {
+    type: 'line',
+    data: {
+        labels: monthLabels,
+        datasets: [
+            {
+                label: 'Leads Created',
+                data: monthlyLeads,
+                borderColor: '#667eea',
+                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 4,
+                pointBackgroundColor: '#667eea'
+            },
+            {
+                label: 'Leads Converted',
+                data: monthlyConverted,
+                borderColor: '#48bb78',
+                backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 4,
+                pointBackgroundColor: '#48bb78'
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: true }
+        },
+        scales: {
+            y: { beginAtZero: true }
+        }
+    }
+});
+
+window.revenueChart = new Chart(document.getElementById('revenueChart'), {
+    type: 'bar',
+    data: {
+        labels: monthLabels,
+        datasets: [{
+            label: 'Revenue (₹)',
+            data: revenueData,
+            backgroundColor: 'rgba(72, 187, 120, 0.3)',
+            borderColor: '#48bb78',
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false }
+        },
+        scales: {
+            y: { beginAtZero: true }
+        }
+    }
+});
+
+window.sourceChart = new Chart(document.getElementById('sourceChart'), {
+    type: 'doughnut',
+    data: {
+        labels: sourceLabels,
+        datasets: [{
+            data: sourceDataArr,
+            backgroundColor: ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#fed7aa']
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+            legend: { position: 'bottom' }
+        }
+    }
+});
+            borderColor: '#48bb78', 
+            borderWidth: 2 
+        }] 
+    },
+    options: { 
+        responsive: true, 
+        maintainAspectRatio: false, 
+        plugins: { 
+            legend: { display: false } 
+        }, 
+        scales: { 
+            y: { beginAtZero: true } 
+        } 
+    }
+});
+
+new Chart(document.getElementById('sourceChart'), {
+    type: 'doughnut',
+    data: { 
+        labels: Object.keys(statusData).map(k => k.charAt(0).toUpperCase() + k.slice(1)), 
+        datasets: [{ 
+            data: Object.values(statusData), 
+            backgroundColor: ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#fed7aa'] 
+        }] 
+    },
+    options: { 
+        responsive: true, 
+        maintainAspectRatio: false, 
+        cutout: '60%', 
+        plugins: { 
+            legend: { position: 'bottom' } 
+        } 
+    }
+});
+</script>
+</body>
+</html>
