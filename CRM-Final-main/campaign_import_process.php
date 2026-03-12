@@ -96,9 +96,14 @@ foreach ($rows as $row) {
     $lead_data = [
         'campaign_id' => $campaign_id,
         // Keep a schema-safe default; campaign identity is tracked via campaign_id/lead_campaigns.
-        'source' => 'import',
+        'source' => 'manual',
         'created_by' => $_SESSION['user_id'],
-        'status' => 'new'
+        'status' => 'new',
+        'email' => '',
+        'phone' => '',
+        'company' => '',
+        'service' => '',
+        'notes' => ''
     ];
     $custom_data = [];
     $custom_data_by_field_id = [];

@@ -190,6 +190,78 @@ if (!empty($filters['campaign_id'])) {
         }
         .btn-action:hover { background: #e5e7eb; color: #4f46e5; }
         .btn-delete:hover { background: #fee2e2; color: #ef4444; }
+
+        .lead-row {
+            transition: background-color 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .lead-row.table-active {
+            --bs-table-accent-bg: rgba(59, 130, 246, 0.12);
+            box-shadow: inset 4px 0 0 #3b82f6;
+        }
+
+        .bulk-actions-panel {
+            display: none;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(239,246,255,0.96));
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+        }
+
+        .bulk-actions-panel .bulk-selection-count {
+            font-weight: 700;
+            color: #1e3a8a;
+            white-space: nowrap;
+        }
+
+        .bulk-actions-panel .btn {
+            min-width: 130px;
+        }
+
+        .loading-spinner {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal.fade .modal-dialog {
+            transform: translateY(20px) scale(0.985);
+            transition: transform 0.28s ease-out, opacity 0.28s ease-out;
+        }
+
+        .modal.show .modal-dialog {
+            transform: translateY(0) scale(1);
+        }
+
+        .bulk-edit-mode .single-edit-only,
+        .bulk-edit-mode .single-edit-heading,
+        .bulk-edit-mode .single-edit-footer-note {
+            display: none !important;
+        }
+
+        .bulk-edit-mode .bulk-edit-only {
+            display: block !important;
+        }
+
+        .bulk-edit-only {
+            display: none;
+        }
+
+        .bulk-edit-summary {
+            padding: 0.85rem 1rem;
+            border-radius: 12px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-weight: 600;
+        }
+
+        .toast-container {
+            z-index: 1095;
+        }
         
     </style>
 </head>
@@ -255,8 +327,19 @@ if (!empty($filters['campaign_id'])) {
             </div>
             <?php endif; ?>
             <div class="col-md-3">
-                <button type="submit" class="btn btn-info">Filter</button>
-                <a href="leads_advanced.php" class="btn btn-secondary">Reset</a>
+                <div class="d-flex flex-wrap align-items-center justify-content-md-end gap-2">
+                    <button type="submit" class="btn btn-info">Filter</button>
+                    <a href="leads_advanced.php" class="btn btn-secondary">Reset</a>
+                    <div id="bulkActionsPanel" class="bulk-actions-panel">
+                        <span class="bulk-selection-count"><span id="selectedLeadCount">0</span> leads selected</span>
+                        <button type="button" class="btn btn-warning" id="bulkEditBtn" onclick="openBulkEditModal()">
+                            <span class="btn-label"><i class="fas fa-edit me-2"></i>Bulk Edit</span>
+                        </button>
+                        <button type="button" class="btn btn-danger" id="bulkDeleteBtn" onclick="openBulkDeleteModal()">
+                            <span class="btn-label"><i class="fas fa-trash me-2"></i>Bulk Delete</span>
+                        </button>
+                    </div>
+                </div>
             </div>
         </form>
     </div>
@@ -270,7 +353,7 @@ if (!empty($filters['campaign_id'])) {
                     <thead>
                         <tr>
                             <th width="50">
-                                <input type="checkbox" id="selectAll" class="form-check-input">
+                                <input type="checkbox" id="selectAllLeads" class="form-check-input">
                             </th>
                             <th>Lead Info</th>
                             <th>Contact</th>
@@ -296,7 +379,7 @@ if (!empty($filters['campaign_id'])) {
                                 $lead['custom_data'] = $lead_custom_data_map[$lead['id']];
                             }
                         ?>
-                        <tr>
+                        <tr class="lead-row" data-lead-id="<?php echo (int)$lead['id']; ?>">
                             <td>
                                 <input type="checkbox" class="form-check-input lead-checkbox" value="<?php echo $lead['id']; ?>">
                             </td>
@@ -326,7 +409,7 @@ if (!empty($filters['campaign_id'])) {
                                     </small>
                                 </div>
                             </td>
-                            <td>
+                            <td class="lead-company-cell">
                                 <span class="fw-semibold"><?php echo htmlspecialchars($lead['company'] ?? 'N/A'); ?></span>
                             </td>
                             <?php if (!empty($campaign_custom_fields)): ?>
@@ -342,18 +425,18 @@ if (!empty($filters['campaign_id'])) {
                                     <small class="text-muted">Total: <?php echo $lead['campaign_count']; ?></small>
                                 </div>
                             </td>
-                            <td>
+                            <td class="lead-status-cell">
                                 <span class="status-badge status-<?php echo $lead['status'] ?? 'new'; ?>">
                                     <i class="fas fa-circle"></i>
                                     <?php echo ucfirst($lead['status'] ?? 'new'); ?>
                                 </span>
                             </td>
-                            <td>
+                            <td class="lead-priority-cell">
                                 <span class="priority-badge priority-<?php echo $lead['priority'] ?? 'medium'; ?>">
                                     <?php echo ucfirst($lead['priority'] ?? 'medium'); ?>
                                 </span>
                             </td>
-                            <td>
+                            <td class="lead-source-cell">
                                 <span class="badge bg-light text-secondary border"><?php echo ucfirst(str_replace('-', ' ', $lead['source'] ?? 'manual')); ?></span>
                             </td>
                             <td>
@@ -700,7 +783,7 @@ if (!empty($filters['campaign_id'])) {
         <div class="modal-dialog modal-xl">
             <div class="modal-content">
                 <div class="modal-header bg-warning text-dark">
-                    <h5 class="modal-title"><i class="fas fa-edit me-2"></i>Edit Lead</h5>
+                    <h5 class="modal-title" id="editLeadModalTitle"><i class="fas fa-edit me-2"></i>Edit Lead</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <form method="POST" id="editLeadForm" action="lead_actions.php">
@@ -711,37 +794,27 @@ if (!empty($filters['campaign_id'])) {
 
                         <div class="row">
                             <div class="col-lg-8">
+                                <div class="bulk-edit-only mb-3">
+                                    <div class="bulk-edit-summary">
+                                        Updating <span id="bulkEditSelectionCount">0</span> selected leads. Only non-empty fields below will be applied.
+                                    </div>
+                                </div>
                                 <div class="row">
-                                    <div class="col-md-6">
+                                    <div class="col-md-6 single-edit-only">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Full Name *</label>
                                             <input type="text" class="form-control" name="name" id="edit_name" required>
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Email Address *</label>
-                                            <input type="email" class="form-control" name="email" id="edit_email" required>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="row">
-                                    <div class="col-md-6">
+                                    <div class="col-md-6 single-edit-only">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Phone Number</label>
                                             <input type="tel" class="form-control" name="phone" id="edit_phone">
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label class="form-label fw-bold">Company</label>
-                                            <input type="text" class="form-control" name="company" id="edit_company">
-                                        </div>
-                                    </div>
                                 </div>
                                 
-                                <div class="row mb-3">
+                                <div class="row mb-3 single-edit-only">
                                     <div class="col-md-12">
                                         <label class="form-label fw-bold">Campaign</label>
                                         <select class="form-select" name="campaign_id" id="edit_campaign_id" onchange="loadCampaignFields(this.value, 'edit_campaign_fields_container')">
@@ -754,7 +827,7 @@ if (!empty($filters['campaign_id'])) {
                                 </div>
 
                                 <!-- Dynamic Campaign Fields -->
-                                <div id="edit_campaign_fields_container" class="row mb-3"></div>
+                                <div id="edit_campaign_fields_container" class="row mb-3 single-edit-only"></div>
 
                                 <div class="row">
                                     <?php if ($role === 'admin' || $role === 'superadmin'): ?>
@@ -762,6 +835,7 @@ if (!empty($filters['campaign_id'])) {
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Assign To</label>
                                             <select class="form-select" name="assigned_to" id="edit_assigned_to">
+                                                <option value="">Keep current assignment</option>
                                                 <?php foreach($all_users as $u): ?>
                                                 <option value="<?php echo $u['id']; ?>">
                                                     <?php echo htmlspecialchars($u['username'] . ' (' . ucfirst($u['role']) . ')'); ?>
@@ -773,7 +847,7 @@ if (!empty($filters['campaign_id'])) {
                                     <?php endif; ?>
                                 </div>
 
-                                <div class="row">
+                                <div class="row single-edit-only">
                                     <div class="col-md-6">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Service Interest</label>
@@ -800,7 +874,7 @@ if (!empty($filters['campaign_id'])) {
                                     </div>
                                 </div>
 
-                                <div class="row lead-fields lead-service">
+                                <div class="row lead-fields lead-service single-edit-only">
                                     <div class="col-12">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Message</label>
@@ -810,7 +884,7 @@ if (!empty($filters['campaign_id'])) {
                                 </div>
 
                                 <!-- Course specific fields for edit -->
-                                <div class="row lead-fields d-none" id="edit_course_fields">
+                                <div class="row lead-fields d-none single-edit-only" id="edit_course_fields">
                                     <div class="col-md-6">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Are you a</label>
@@ -844,7 +918,7 @@ if (!empty($filters['campaign_id'])) {
                                 </div>
 
                                 <!-- Franchise specific fields for edit -->
-                                <div class="row lead-fields d-none" id="edit_franchise_fields">
+                                <div class="row lead-fields d-none single-edit-only" id="edit_franchise_fields">
                                     <div class="col-md-6">
                                         <div class="mb-3">
                                             <label class="form-label fw-bold">Investment Budget</label>
@@ -874,11 +948,13 @@ if (!empty($filters['campaign_id'])) {
 
                             <div class="col-lg-4">
                                 <div class="bg-light p-3 rounded">
-                                    <h6 class="fw-bold mb-3">Lead Classification</h6>
+                                    <h6 class="fw-bold mb-3 single-edit-heading">Lead Classification</h6>
+                                    <h6 class="fw-bold mb-3 bulk-edit-only">Bulk Lead Classification</h6>
 
                                     <div class="mb-3">
                                         <label class="form-label fw-bold">Status</label>
                                         <select class="form-select" name="status" id="edit_status">
+                                            <option value="">Keep current status</option>
                                             <option value="new">New</option>
                                             <option value="contacted">Contacted</option>
                                             <option value="qualified">Qualified</option>
@@ -891,6 +967,7 @@ if (!empty($filters['campaign_id'])) {
                                     <div class="mb-3">
                                         <label class="form-label fw-bold">Priority</label>
                                         <select class="form-select" name="priority" id="edit_priority">
+                                            <option value="">Keep current priority</option>
                                             <option value="low">Low</option>
                                             <option value="medium">Medium</option>
                                             <option value="high">High</option>
@@ -900,6 +977,7 @@ if (!empty($filters['campaign_id'])) {
                                     <div class="mb-3">
                                         <label class="form-label fw-bold">Source</label>
                                         <select class="form-select" name="source" id="edit_source">
+                                            <option value="">Keep current source</option>
                                             <option value="manual">Manual Entry</option>
                                             <option value="website">Website</option>
                                             <option value="social-media">Social Media</option>
@@ -909,27 +987,31 @@ if (!empty($filters['campaign_id'])) {
                                         </select>
                                     </div>
 
-                                    <hr class="my-3">
-                                    <h6 class="fw-bold mb-3"><i class="fas fa-chart-line me-2"></i>Log Activity (Daily Stats)</h6>
+                                    <hr class="my-3 single-edit-only">
+                                    <h6 class="fw-bold mb-3 single-edit-only"><i class="fas fa-chart-line me-2"></i>Log Activity (Daily Stats)</h6>
 
-                                    <div class="mb-3">
+                                    <div class="mb-3 single-edit-only">
                                         <label class="form-label fw-bold">Add Follow-ups</label>
                                         <input type="number" class="form-control" name="followups_per_day" min="0" step="1" value="0">
                                     </div>
 
-                                    <div class="mb-3">
+                                    <div class="mb-3 single-edit-only">
                                         <label class="form-label fw-bold">Add Conversions</label>
                                         <input type="number" class="form-control" name="conversions_per_day" min="0" step="1" value="0">
                                     </div>
 
-                                    <div class="mb-3">
+                                    <div class="mb-3 single-edit-only">
                                         <label class="form-label fw-bold">Add Walk-ins</label>
                                         <input type="number" class="form-control" name="walkins_per_day" min="0" step="1" value="0">
                                     </div>
 
-                                    <div class="alert alert-warning">
+                                    <div class="alert alert-warning single-edit-footer-note">
                                         <i class="fas fa-exclamation-triangle me-2"></i>
                                         <small>Changes will be saved immediately.</small>
+                                    </div>
+                                    <div class="alert alert-info bulk-edit-only mb-0">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        Leave a field empty to keep the current value for each selected lead.
                                     </div>
                                 </div>
                             </div>
@@ -939,8 +1021,8 @@ if (!empty($filters['campaign_id'])) {
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
                             <i class="fas fa-times me-2"></i>Cancel
                         </button>
-                        <button type="submit" class="btn btn-warning-modern">
-                            <i class="fas fa-save me-2"></i>Update Lead
+                        <button type="submit" class="btn btn-warning-modern" id="editLeadSubmitBtn">
+                            <span class="btn-label"><i class="fas fa-save me-2"></i>Update Lead</span>
                         </button>
                     </div>
                 </form>
@@ -969,44 +1051,23 @@ if (!empty($filters['campaign_id'])) {
         </div>
     </div>
 
-    <!-- Bulk Action Modal -->
-    <div class="modal fade" id="bulkActionModal" tabindex="-1">
+    <!-- Bulk Delete Modal -->
+    <div class="modal fade" id="bulkDeleteModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header bg-success text-white">
-                    <h5 class="modal-title"><i class="fas fa-edit me-2"></i>Bulk Update</h5>
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="fas fa-trash me-2"></i>Confirm Bulk Delete</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
-                <form method="POST" id="bulkActionForm">
-                    <div class="modal-body">
-                        <input type="hidden" name="action" value="bulk_update">
-                        <div id="selectedLeadsInput"></div>
-
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Update Status</label>
-                            <select class="form-select" name="bulk_status" required>
-                                <option value="">Select New Status</option>
-                                <option value="new">New</option>
-                                <option value="contacted">Contacted</option>
-                                <option value="qualified">Qualified</option>
-                                <option value="proposal_sent">Proposal Sent</option>
-                                <option value="converted">Converted</option>
-                                <option value="lost">Lost</option>
-                            </select>
-                        </div>
-
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i>
-                            <span id="bulkActionCount">0</span> leads will be updated.
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-success-modern">
-                            <i class="fas fa-save me-2"></i>Update Selected
-                        </button>
-                    </div>
-                </form>
+                <div class="modal-body">
+                    <p class="mb-0">Delete <strong><span id="bulkDeleteCount">0</span></strong> selected leads? This will also remove related assignments, campaigns, and custom data.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="confirmBulkDeleteBtn" onclick="confirmBulkDelete()">
+                        <span class="btn-label"><i class="fas fa-trash me-2"></i>Delete Selected</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1044,6 +1105,15 @@ if (!empty($filters['campaign_id'])) {
         </div>
     </div>
 
+    <div class="toast-container position-fixed top-0 end-0 p-3">
+        <div id="actionToast" class="toast align-items-center text-bg-dark border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body" id="actionToastMessage">Action completed.</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
@@ -1054,6 +1124,8 @@ if (!empty($filters['campaign_id'])) {
     <script>
         let currentLead = null;
         let leadsTable;
+        let selectedLeadIds = [];
+        let isBulkEditMode = false;
         
         // Calculate indices for DataTables based on dynamic columns
         <?php 
@@ -1067,6 +1139,7 @@ if (!empty($filters['campaign_id'])) {
             leadsTable = $('#leadsTable').DataTable({
                 responsive: true,
                 pageLength: 25,
+                stateSave: true,
                 order: [[<?php echo $created_col_idx; ?>, 'desc']], // Sort by created date
                 columnDefs: [
                     { orderable: false, targets: [0, <?php echo $actions_col_idx; ?>] }, // Disable sorting on checkbox and actions
@@ -1087,6 +1160,7 @@ if (!empty($filters['campaign_id'])) {
                 drawCallback: function() {
                     // Re-apply animations to new rows
                     $('.table tbody tr').addClass('animate__animated animate__fadeIn');
+                    syncVisibleSelection();
                 }
             });
 
@@ -1095,20 +1169,17 @@ if (!empty($filters['campaign_id'])) {
                 leadsTable.search(this.value).draw();
             });
             
-            // Select all functionality
-            $('#selectAll').on('change', function() {
-                $('.lead-checkbox').prop('checked', this.checked);
-                updateBulkActionButton();
+            $('#selectAllLeads').on('change', function() {
+                toggleVisibleRowsSelection(this.checked);
             });
 
-            // Individual checkbox functionality
             $(document).on('change', '.lead-checkbox', function() {
-                updateBulkActionButton();
-
-                // Update select all checkbox
-                const totalCheckboxes = $('.lead-checkbox').length;
-                const checkedCheckboxes = $('.lead-checkbox:checked').length;
-                $('#selectAll').prop('checked', totalCheckboxes === checkedCheckboxes);
+                const leadId = String($(this).val());
+                const isChecked = $(this).is(':checked');
+                updateSelectedLeadIds(leadId, isChecked);
+                toggleRowHighlight($(this).closest('tr'), isChecked);
+                console.log('Row checkbox toggled:', { leadId, isChecked, selectedLeadIds: [...selectedLeadIds] });
+                updateBulkActionState();
             });
         });
 
@@ -1123,23 +1194,106 @@ if (!empty($filters['campaign_id'])) {
             window.location.href = url.toString();
         }
 
-        // Update bulk action button state
-        function updateBulkActionButton() {
-            const selectedCount = $('.lead-checkbox:checked').length;
-            const bulkBtn = $('button[onclick="bulkAction()"]');
-            const deleteBtn = $('button[onclick="deleteSelected()"]');
+        function getVisibleLeadCheckboxes() {
+            if (!leadsTable) {
+                return $('#leadsTable tbody .lead-checkbox');
+            }
+            return $(leadsTable.rows({ search: 'applied', page: 'current' }).nodes()).find('.lead-checkbox');
+        }
+
+        function updateSelectedLeadIds(leadId, isSelected) {
+            if (isSelected) {
+                if (!selectedLeadIds.includes(leadId)) {
+                    selectedLeadIds.push(leadId);
+                }
+            } else {
+                selectedLeadIds = selectedLeadIds.filter(id => id !== leadId);
+            }
+        }
+
+        function toggleRowHighlight($row, isSelected) {
+            $row.toggleClass('table-active', isSelected);
+        }
+
+        function syncVisibleSelection() {
+            const $visibleCheckboxes = getVisibleLeadCheckboxes();
+            $visibleCheckboxes.each(function() {
+                const leadId = String(this.value);
+                const isSelected = selectedLeadIds.includes(leadId);
+                $(this).prop('checked', isSelected);
+                toggleRowHighlight($(this).closest('tr'), isSelected);
+            });
+            updateBulkActionState();
+        }
+
+        function toggleVisibleRowsSelection(isChecked) {
+            const $visibleCheckboxes = getVisibleLeadCheckboxes();
+            $visibleCheckboxes.each(function() {
+                const leadId = String(this.value);
+                $(this).prop('checked', isChecked);
+                updateSelectedLeadIds(leadId, isChecked);
+                toggleRowHighlight($(this).closest('tr'), isChecked);
+            });
+            console.log('Select All toggled:', { isChecked, selectedLeadIds: [...selectedLeadIds] });
+            updateBulkActionState();
+        }
+
+        function updateBulkActionState() {
+            const selectedCount = selectedLeadIds.length;
+            const $panel = $('#bulkActionsPanel');
+            const $visibleCheckboxes = getVisibleLeadCheckboxes();
+            const visibleCount = $visibleCheckboxes.length;
+            const visibleCheckedCount = $visibleCheckboxes.filter(':checked').length;
+
+            $('#selectedLeadCount').text(selectedCount);
+            $('#selectAllLeads')
+                .prop('checked', visibleCount > 0 && visibleCheckedCount === visibleCount)
+                .prop('indeterminate', visibleCheckedCount > 0 && visibleCheckedCount < visibleCount);
 
             if (selectedCount > 0) {
-                bulkBtn.removeClass('btn-success-modern').addClass('btn-warning-modern');
-                bulkBtn.html(`<i class="fas fa-edit"></i>Bulk Edit (${selectedCount})`);
-                deleteBtn.removeClass('btn-danger-modern').addClass('btn-outline-danger');
-                deleteBtn.html(`<i class="fas fa-trash"></i>Delete (${selectedCount})`);
+                $panel.stop(true, true).fadeIn(180).css('display', 'inline-flex');
             } else {
-                bulkBtn.removeClass('btn-warning-modern').addClass('btn-success-modern');
-                bulkBtn.html('<i class="fas fa-edit"></i>Bulk Edit');
-                deleteBtn.removeClass('btn-outline-danger').addClass('btn-danger-modern');
-                deleteBtn.html('<i class="fas fa-trash"></i>Delete Selected');
+                $panel.stop(true, true).fadeOut(180);
             }
+        }
+
+        function resetSelectionState() {
+            selectedLeadIds = [];
+            syncVisibleSelection();
+            console.log('Selection reset:', { selectedLeadIds: [...selectedLeadIds] });
+        }
+
+        function setButtonLoading(buttonSelector, isLoading, loadingText) {
+            const $button = $(buttonSelector);
+            if (!$button.length) return;
+
+            if (isLoading) {
+                if (!$button.data('original-html')) {
+                    $button.data('original-html', $button.html());
+                }
+                $button.prop('disabled', true).html(
+                    `<span class="loading-spinner"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>${loadingText}</span>`
+                );
+            } else if ($button.data('original-html')) {
+                $button.html($button.data('original-html')).prop('disabled', false);
+            } else {
+                $button.prop('disabled', false);
+            }
+        }
+
+        function setBulkActionLoading(isLoading, source) {
+            setButtonLoading('#bulkEditBtn', isLoading && source === 'edit', 'Updating...');
+            setButtonLoading('#bulkDeleteBtn', isLoading && source === 'delete', 'Deleting...');
+            setButtonLoading('#confirmBulkDeleteBtn', isLoading && source === 'delete', 'Deleting...');
+            setButtonLoading('#editLeadSubmitBtn', isLoading && source === 'edit', isBulkEditMode ? 'Updating...' : 'Saving...');
+        }
+
+        function showToast(message, type = 'success') {
+            const toastEl = document.getElementById('actionToast');
+            const toastMessage = document.getElementById('actionToastMessage');
+            toastMessage.textContent = message;
+            toastEl.className = `toast align-items-center border-0 text-bg-${type === 'error' ? 'danger' : type}`;
+            bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 3000 }).show();
         }
 
         // View lead function
@@ -1246,13 +1400,17 @@ if (!empty($filters['campaign_id'])) {
 
         // Edit lead function
         function editLead(lead) {
+            isBulkEditMode = false;
             currentLead = lead;
+            const modalEl = document.getElementById('editLeadModal');
+            const formEl = document.getElementById('editLeadForm');
+            modalEl.classList.remove('bulk-edit-mode');
+            formEl.reset();
+            document.getElementById('edit_name').setAttribute('required', 'required');
 
             document.getElementById('edit_lead_id').value = lead.id;
             document.getElementById('edit_name').value = lead.name || '';
-            document.getElementById('edit_email').value = lead.email || '';
             document.getElementById('edit_phone').value = lead.phone || '';
-            document.getElementById('edit_company').value = lead.company || '';
             document.getElementById('edit_service').value = lead.service || '';
             document.getElementById('edit_status').value = lead.status || 'new';
             document.getElementById('edit_priority').value = lead.priority || 'medium';
@@ -1313,7 +1471,45 @@ if (!empty($filters['campaign_id'])) {
                 document.getElementById('edit_campaign_fields_container').innerHTML = '';
             }
 
-            new bootstrap.Modal(document.getElementById('editLeadModal')).show();
+            const submitBtnLabel = document.querySelector('#editLeadSubmitBtn .btn-label');
+            if (submitBtnLabel) {
+                submitBtnLabel.innerHTML = '<i class="fas fa-save me-2"></i>Update Lead';
+            }
+            document.getElementById('editLeadModalTitle').innerHTML = '<i class="fas fa-edit me-2"></i>Edit Lead';
+
+            new bootstrap.Modal(modalEl).show();
+        }
+
+        function openBulkEditModal() {
+            if (!selectedLeadIds.length) {
+                showToast('Select at least one lead first.', 'error');
+                return;
+            }
+
+            isBulkEditMode = true;
+            currentLead = null;
+            const modalEl = document.getElementById('editLeadModal');
+            const formEl = document.getElementById('editLeadForm');
+            modalEl.classList.add('bulk-edit-mode');
+            formEl.reset();
+
+            document.getElementById('edit_lead_id').value = '';
+            document.getElementById('edit_lead_type').value = '';
+            document.getElementById('edit_name').removeAttribute('required');
+            document.getElementById('edit_campaign_fields_container').innerHTML = '';
+            document.getElementById('bulkEditSelectionCount').textContent = selectedLeadIds.length;
+            if (document.getElementById('edit_assigned_to')) {
+                document.getElementById('edit_assigned_to').value = '';
+            }
+
+            const submitBtnLabel = document.querySelector('#editLeadSubmitBtn .btn-label');
+            if (submitBtnLabel) {
+                submitBtnLabel.innerHTML = '<i class="fas fa-save me-2"></i>Update Selected';
+            }
+            document.getElementById('editLeadModalTitle').innerHTML = '<i class="fas fa-edit me-2"></i>Bulk Edit Leads';
+
+            console.log('Opening bulk edit modal:', { selectedLeadIds: [...selectedLeadIds] });
+            new bootstrap.Modal(modalEl).show();
         }
 
         async function postLeadAction(formData) {
@@ -1348,58 +1544,77 @@ if (!empty($filters['campaign_id'])) {
                 await postLeadAction(fd);
                 window.location.reload();
             } catch (err) {
-                alert(err.message || 'Failed to delete lead.');
+                showToast(err.message || 'Failed to delete lead.', 'error');
             }
         }
 
-        // Bulk action function
-        function bulkAction() {
-            const selectedLeads = $('.lead-checkbox:checked');
-            if (selectedLeads.length === 0) {
-                alert('Please select at least one lead to update.');
+        function openBulkDeleteModal() {
+            if (!selectedLeadIds.length) {
+                showToast('Select at least one lead first.', 'error');
                 return;
             }
 
-            // Populate hidden inputs for selected leads
-            const inputsHtml = Array.from(selectedLeads).map(checkbox =>
-                `<input type="hidden" name="lead_ids[]" value="${checkbox.value}">`
-            ).join('');
-
-            document.getElementById('selectedLeadsInput').innerHTML = inputsHtml;
-            document.getElementById('bulkActionCount').textContent = selectedLeads.length;
-
-            new bootstrap.Modal(document.getElementById('bulkActionModal')).show();
+            document.getElementById('bulkDeleteCount').textContent = selectedLeadIds.length;
+            console.log('Opening bulk delete modal:', { selectedLeadIds: [...selectedLeadIds] });
+            new bootstrap.Modal(document.getElementById('bulkDeleteModal')).show();
         }
 
-        // Delete selected function
-        function deleteSelected() {
-            const selectedLeads = $('.lead-checkbox:checked');
-            if (selectedLeads.length === 0) {
-                alert('Please select at least one lead to delete.');
+        async function confirmBulkDelete() {
+            if (!selectedLeadIds.length) {
                 return;
             }
 
-            if(confirm(`Are you sure you want to delete ${selectedLeads.length} selected leads? This action cannot be undone.`)) {
-                // Submit a single form with all selected lead IDs for bulk deletion
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.style.display = 'none';
-                const actionInput = document.createElement('input');
-                actionInput.type = 'hidden';
-                actionInput.name = 'action';
-                actionInput.value = 'bulk_delete';
-                form.appendChild(actionInput);
-
-                selectedLeads.each(function() {
-                    const input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'lead_ids[]';
-                    input.value = this.value;
-                    form.appendChild(input);
+            setBulkActionLoading(true, 'delete');
+            try {
+                const response = await $.ajax({
+                    url: 'ajax/bulk_delete_leads.php',
+                    method: 'POST',
+                    dataType: 'json',
+                    data: { lead_ids: selectedLeadIds }
                 });
 
-                document.body.appendChild(form);
-                form.submit();
+                if (!response.success) {
+                    throw new Error(response.message || 'Bulk delete failed.');
+                }
+
+                response.deleted_ids.forEach(function(leadId) {
+                    const $row = $(`#leadsTable tbody tr[data-lead-id="${leadId}"]`);
+                    if ($row.length && leadsTable) {
+                        leadsTable.row($row).remove();
+                    }
+                });
+
+                if (leadsTable) {
+                    leadsTable.draw(false);
+                }
+
+                bootstrap.Modal.getInstance(document.getElementById('bulkDeleteModal')).hide();
+                resetSelectionState();
+                showToast(response.message || 'Selected leads deleted successfully.');
+                console.log('Bulk delete success:', response);
+            } catch (error) {
+                console.error('Bulk delete failed:', error);
+                showToast(error.message || 'Failed to delete selected leads.', 'error');
+            } finally {
+                setBulkActionLoading(false, 'delete');
+            }
+        }
+
+        function updateRowCellsAfterBulk(row, payload) {
+            if (payload.status) {
+                $(row).find('.lead-status-cell').html(
+                    `<span class="status-badge status-${payload.status}"><i class="fas fa-circle"></i> ${payload.status.replace(/_/g, ' ').replace(/\b\w/g, function(ch){ return ch.toUpperCase(); })}</span>`
+                );
+            }
+            if (payload.priority) {
+                $(row).find('.lead-priority-cell').html(
+                    `<span class="priority-badge priority-${payload.priority}">${payload.priority.replace(/\b\w/g, function(ch){ return ch.toUpperCase(); })}</span>`
+                );
+            }
+            if (payload.source) {
+                $(row).find('.lead-source-cell').html(
+                    `<span class="badge bg-light text-secondary border">${payload.source.replace(/-/g, ' ').replace(/\b\w/g, function(ch){ return ch.toUpperCase(); })}</span>`
+                );
             }
         }
 
@@ -1462,6 +1677,19 @@ if (!empty($filters['campaign_id'])) {
             if (addSel) addSel.addEventListener('change', function(){ toggleLeadFields('add', this.value); });
             var editSel = document.getElementById('edit_lead_type');
             if (editSel) editSel.addEventListener('change', function(){ toggleLeadFields('edit', this.value); });
+            var editModal = document.getElementById('editLeadModal');
+            if (editModal) {
+                editModal.addEventListener('hidden.bs.modal', function() {
+                    isBulkEditMode = false;
+                    editModal.classList.remove('bulk-edit-mode');
+                    document.getElementById('edit_name').setAttribute('required', 'required');
+                    document.getElementById('editLeadModalTitle').innerHTML = '<i class="fas fa-edit me-2"></i>Edit Lead';
+                    var submitLabel = document.querySelector('#editLeadSubmitBtn .btn-label');
+                    if (submitLabel) {
+                        submitLabel.innerHTML = '<i class="fas fa-save me-2"></i>Update Lead';
+                    }
+                });
+            }
 
             // Save edits through lead_actions.php and stay on Lead Management page.
             var editForm = document.getElementById('editLeadForm');
@@ -1469,10 +1697,55 @@ if (!empty($filters['campaign_id'])) {
                 editForm.addEventListener('submit', async function(e) {
                     e.preventDefault();
                     try {
-                        await postLeadAction(new FormData(editForm));
-                        window.location.reload();
+                        if (isBulkEditMode) {
+                            const payload = {
+                                lead_ids: selectedLeadIds,
+                                status: document.getElementById('edit_status').value,
+                                priority: document.getElementById('edit_priority').value,
+                                source: document.getElementById('edit_source').value
+                            };
+
+                            if (document.getElementById('edit_assigned_to')) {
+                                payload.assigned_to = document.getElementById('edit_assigned_to').value;
+                            }
+
+                            if (!payload.status && !payload.priority && !payload.source && !payload.assigned_to) {
+                                throw new Error('Enter at least one field for bulk update.');
+                            }
+
+                            setBulkActionLoading(true, 'edit');
+                            const response = await $.ajax({
+                                url: 'ajax/bulk_update_leads.php',
+                                method: 'POST',
+                                dataType: 'json',
+                                data: payload
+                            });
+
+                            if (!response.success) {
+                                throw new Error(response.message || 'Bulk update failed.');
+                            }
+
+                            selectedLeadIds.forEach(function(leadId) {
+                                const row = document.querySelector(`#leadsTable tbody tr[data-lead-id="${leadId}"]`);
+                                if (row) {
+                                    updateRowCellsAfterBulk(row, payload);
+                                }
+                            });
+
+                            bootstrap.Modal.getInstance(document.getElementById('editLeadModal')).hide();
+                            resetSelectionState();
+                            showToast(response.message || 'Selected leads updated successfully.');
+                            console.log('Bulk update success:', response);
+                        } else {
+                            document.getElementById('edit_name').setAttribute('required', 'required');
+                            await postLeadAction(new FormData(editForm));
+                            window.location.reload();
+                        }
                     } catch (err) {
-                        alert(err.message || 'Failed to update lead.');
+                        console.error('Edit submit failed:', err);
+                        showToast(err.message || 'Failed to update lead.', 'error');
+                    } finally {
+                        setBulkActionLoading(false, 'edit');
                     }
                 });
             }

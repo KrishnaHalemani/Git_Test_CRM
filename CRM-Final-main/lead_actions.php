@@ -65,9 +65,7 @@ switch ($action) {
 
         $update_data = [
             'name' => $_POST['name'],
-            'email' => $_POST['email'],
             'phone' => $_POST['phone'],
-            'company' => $_POST['company'] ?? $lead['company'],
             'service' => !empty($_POST['service']) ? $_POST['service'] : ($_POST['lead_type'] ?? $lead['service']),
             'status' => $_POST['status'] ?? $lead['status'],
             'source' => $_POST['source'] ?? $lead['source'],

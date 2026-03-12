@@ -142,12 +142,30 @@ function addLead($lead_data) {
     if (!$conn) return false;
     
     try {
+        $name = trim((string)($lead_data['name'] ?? ''));
+        $email = trim((string)($lead_data['email'] ?? ''));
+        $phone = trim((string)($lead_data['phone'] ?? ''));
+        $company = trim((string)($lead_data['company'] ?? ''));
+        $service = trim((string)($lead_data['service'] ?? ''));
+        $status = trim((string)($lead_data['status'] ?? 'new'));
+        $source = trim((string)($lead_data['source'] ?? 'manual'));
+        $notes = (string)($lead_data['notes'] ?? '');
+
+        if ($name === '') {
+            return false;
+        }
+
+        $allowed_sources = ['website', 'social-media', 'referral', 'advertisement', 'manual', 'other', 'franchise', 'course', 'service'];
+        if (!in_array($source, $allowed_sources, true)) {
+            $source = 'manual';
+        }
+
         $assigned_to = array_key_exists('assigned_to', $lead_data) ? $lead_data['assigned_to'] : 2;
         $created_by = isset($lead_data['created_by']) ? $lead_data['created_by'] : 2;
         $estimated_value = isset($lead_data['estimated_value']) ? $lead_data['estimated_value'] : 0.00;
         // Enforce: do not store estimated value for Service or Course leads
-        $service_field = strtolower(trim((string)($lead_data['service'] ?? '')));
-        $source_field = strtolower(trim((string)($lead_data['source'] ?? '')));
+        $service_field = strtolower($service);
+        $source_field = strtolower($source);
         if (in_array($service_field, ['service','course']) || in_array($source_field, ['service','course'])) {
             $estimated_value = 0.00;
         }
@@ -182,17 +200,17 @@ function addLead($lead_data) {
         if ($db_type === 'pdo') {
             $stmt = $conn->prepare($sql);
             $params = [
-                $lead_data['name'],
-                $lead_data['email'],
-                $lead_data['phone'],
-                $lead_data['company'],
-                $lead_data['service'],
-                $lead_data['status'],
-                $lead_data['source'],
+                $name,
+                $email,
+                $phone,
+                $company,
+                $service,
+                $status,
+                $source,
                 $priority,
                 $assigned_to,
                 $created_by,
-                $lead_data['notes'],
+                $notes,
                 $estimated_value
             ];
             if ($has_campaign_id_column) {
@@ -214,17 +232,9 @@ function addLead($lead_data) {
             }
 
             // mysqli bind_param requires variables (passed by reference). Create locals.
-            $name = $lead_data['name'];
-            $email = $lead_data['email'];
-            $phone = $lead_data['phone'];
-            $company = $lead_data['company'];
-            $service = $lead_data['service'];
-            $status = $lead_data['status'];
-            $source = $lead_data['source'];
             $prio = $priority;
             $assign = $assigned_to;
             $creator = $created_by;
-            $notes = $lead_data['notes'];
             $est = $estimated_value;
             if ($has_campaign_id_column) {
                 $camp_id = $campaign_id;
@@ -1012,7 +1022,7 @@ function updateLead($id, $lead_data) {
     try {
         $fields = [];
         $params = [];
-        foreach(['name','email','phone','company','service','status','source','priority','assigned_to','notes','estimated_value'] as $f) {
+        foreach(['name','email','phone','company','service','status','source','priority','assigned_to','notes','estimated_value','updated_at'] as $f) {
             if (isset($lead_data[$f])) { $fields[] = "$f = ?"; $params[] = $lead_data[$f]; }
         }
         if (empty($fields)) return true;
@@ -1030,7 +1040,7 @@ function updateLead($id, $lead_data) {
             return $result;
         } else {
             // Build types string based on field names so numeric fields use proper types
-            $allowed = ['name','email','phone','company','service','status','source','priority','assigned_to','notes','estimated_value'];
+            $allowed = ['name','email','phone','company','service','status','source','priority','assigned_to','notes','estimated_value','updated_at'];
             $types = '';
             foreach ($allowed as $f) {
                 if (isset($lead_data[$f])) {
