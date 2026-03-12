@@ -142,7 +142,7 @@ function addLead($lead_data) {
     if (!$conn) return false;
     
     try {
-        $assigned_to = isset($lead_data['assigned_to']) ? $lead_data['assigned_to'] : 2;
+        $assigned_to = array_key_exists('assigned_to', $lead_data) ? $lead_data['assigned_to'] : 2;
         $created_by = isset($lead_data['created_by']) ? $lead_data['created_by'] : 2;
         $estimated_value = isset($lead_data['estimated_value']) ? $lead_data['estimated_value'] : 0.00;
         // Enforce: do not store estimated value for Service or Course leads
@@ -200,7 +200,9 @@ function addLead($lead_data) {
             }
             $stmt->execute($params);
             $lead_id = $conn->lastInsertId();
-            addLeadAssignment($lead_id, $assigned_to, $created_by);
+            if (!empty($assigned_to)) {
+                addLeadAssignment($lead_id, $assigned_to, $created_by);
+            }
             logLeadActivity($lead_id, $created_by, 'created', "New lead added: " . $lead_data['name']);
             return $lead_id;
         } else {
@@ -260,7 +262,9 @@ function addLead($lead_data) {
 
             if ($stmt->execute()) {
                 $lead_id = $conn->insert_id;
-                addLeadAssignment($lead_id, $assigned_to, $created_by);
+                if (!empty($assigned_to)) {
+                    addLeadAssignment($lead_id, $assigned_to, $created_by);
+                }
                 logLeadActivity($lead_id, $created_by, 'created', "New lead added: " . $lead_data['name']);
                 return $lead_id;
             } else {
@@ -468,42 +472,391 @@ function getAllUsers($limit = 1000) {
     } catch (Exception $e) { return []; }
 }
 
-/**
- * Create an assignment mapping between a lead and a user.
- * This makes it possible to assign a single lead to many users without duplicating rows.
- */
-function addLeadAssignment($lead_id, $user_id, $assigned_by = null) {
+function beginDbTransaction() {
     global $conn, $db_type;
     if (!$conn) return false;
     try {
-        // Ensure table exists (safe to run repeatedly)
+        if ($db_type === 'pdo') {
+            if (!$conn->inTransaction()) {
+                return $conn->beginTransaction();
+            }
+            return true;
+        }
+        if (method_exists($conn, 'begin_transaction')) {
+            return $conn->begin_transaction();
+        }
+        return $conn->query("START TRANSACTION");
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function commitDbTransaction() {
+    global $conn, $db_type;
+    if (!$conn) return false;
+    try {
+        if ($db_type === 'pdo') {
+            if ($conn->inTransaction()) {
+                return $conn->commit();
+            }
+            return true;
+        }
+        return $conn->commit();
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function rollbackDbTransaction() {
+    global $conn, $db_type;
+    if (!$conn) return false;
+    try {
+        if ($db_type === 'pdo') {
+            if ($conn->inTransaction()) {
+                return $conn->rollBack();
+            }
+            return true;
+        }
+        return $conn->rollback();
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function ensureLeadAssignmentsTable() {
+    global $conn, $db_type;
+    if (!$conn) return false;
+
+    static $ready = null;
+    if ($ready !== null) return $ready;
+
+    try {
         $create = "CREATE TABLE IF NOT EXISTS lead_assignments (
             id INT AUTO_INCREMENT PRIMARY KEY,
             lead_id INT NOT NULL,
             user_id INT NOT NULL,
             assigned_by INT DEFAULT NULL,
             assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            source ENUM('campaign_auto', 'manual', 'reassigned') DEFAULT 'manual',
             UNIQUE KEY ux_lead_user (lead_id, user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
-        $conn->exec = $conn->exec ?? null;
+
         if ($db_type === 'pdo') {
             $conn->exec($create);
+            $column = $conn->query("SHOW COLUMNS FROM lead_assignments LIKE 'source'");
+            if (!$column || !$column->fetch()) {
+                $conn->exec("ALTER TABLE lead_assignments ADD COLUMN source ENUM('campaign_auto', 'manual', 'reassigned') DEFAULT 'manual' AFTER assigned_at");
+            }
         } else {
             $conn->query($create);
+            $column = $conn->query("SHOW COLUMNS FROM lead_assignments LIKE 'source'");
+            if (!$column || $column->num_rows === 0) {
+                $conn->query("ALTER TABLE lead_assignments ADD COLUMN source ENUM('campaign_auto', 'manual', 'reassigned') DEFAULT 'manual' AFTER assigned_at");
+            }
         }
 
-        // Insert mapping if not exists
+        $ready = true;
+        return true;
+    } catch (Exception $e) {
+        $ready = false;
+        return false;
+    }
+}
+
+/**
+ * Create an assignment mapping between a lead and a user.
+ * This makes it possible to assign a single lead to many users without duplicating rows.
+ */
+function addLeadAssignment($lead_id, $user_id, $assigned_by = null, $source = 'manual') {
+    global $conn, $db_type;
+    if (!$conn) return false;
+    if (empty($lead_id) || empty($user_id)) return false;
+    try {
+        if (!ensureLeadAssignmentsTable()) return false;
         if ($db_type === 'pdo') {
-            $stmt = $conn->prepare("INSERT IGNORE INTO lead_assignments (lead_id, user_id, assigned_by) VALUES (?, ?, ?)");
-            $stmt->execute([$lead_id, $user_id, $assigned_by]);
+            $stmt = $conn->prepare("INSERT INTO lead_assignments (lead_id, user_id, assigned_by, source) VALUES (?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE assigned_by = VALUES(assigned_by), source = VALUES(source), assigned_at = CURRENT_TIMESTAMP");
+            $stmt->execute([$lead_id, $user_id, $assigned_by, $source]);
             return true;
         } else {
-            $stmt = $conn->prepare("INSERT IGNORE INTO lead_assignments (lead_id, user_id, assigned_by) VALUES (?, ?, ?)");
-            $stmt->bind_param("iii", $lead_id, $user_id, $assigned_by);
+            $stmt = $conn->prepare("INSERT INTO lead_assignments (lead_id, user_id, assigned_by, source) VALUES (?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE assigned_by = VALUES(assigned_by), source = VALUES(source), assigned_at = CURRENT_TIMESTAMP");
+            $stmt->bind_param("iiis", $lead_id, $user_id, $assigned_by, $source);
             return $stmt->execute();
         }
     } catch (Exception $e) {
         return false;
+    }
+}
+
+function updateLeadAssignee($lead_id, $assigned_to, $assigned_by = null, $source = 'manual', $use_transaction = true) {
+    global $conn, $db_type;
+    if (!$conn || !$lead_id) return false;
+
+    try {
+        if ($use_transaction && !beginDbTransaction()) {
+            return false;
+        }
+
+        if ($db_type === 'pdo') {
+            $stmt = $conn->prepare("UPDATE leads SET assigned_to = ? WHERE id = ?");
+            $stmt->execute([$assigned_to, $lead_id]);
+        } else {
+            if ($assigned_to === null || $assigned_to === '') {
+                $stmt = $conn->prepare("UPDATE leads SET assigned_to = NULL WHERE id = ?");
+                $stmt->bind_param("i", $lead_id);
+            } else {
+                $stmt = $conn->prepare("UPDATE leads SET assigned_to = ? WHERE id = ?");
+                $stmt->bind_param("ii", $assigned_to, $lead_id);
+            }
+            $stmt->execute();
+        }
+
+        if (!empty($assigned_to) && !addLeadAssignment($lead_id, $assigned_to, $assigned_by, $source)) {
+            if ($use_transaction) rollbackDbTransaction();
+            return false;
+        }
+
+        if ($use_transaction) {
+            commitDbTransaction();
+        }
+        return true;
+    } catch (Exception $e) {
+        if ($use_transaction) rollbackDbTransaction();
+        return false;
+    }
+}
+
+function ensureCampaignUserTargetsTable() {
+    global $conn, $db_type;
+    if (!$conn) return false;
+
+    static $ready = null;
+    if ($ready !== null) return $ready;
+
+    try {
+        $sql = "CREATE TABLE IF NOT EXISTS campaign_user_targets (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            campaign_id INT NOT NULL,
+            user_id INT NOT NULL,
+            lead_target INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY ux_campaign_user_target (campaign_id, user_id),
+            INDEX idx_campaign_target_campaign (campaign_id),
+            INDEX idx_campaign_target_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+
+        if ($db_type === 'pdo') {
+            $conn->exec($sql);
+        } else {
+            $conn->query($sql);
+        }
+
+        $ready = true;
+        return true;
+    } catch (Exception $e) {
+        $ready = false;
+        return false;
+    }
+}
+
+function getCampaignUserTargets($campaign_id) {
+    global $conn, $db_type;
+    if (!$conn || !$campaign_id) return [];
+    if (!ensureCampaignUserTargetsTable()) return [];
+
+    try {
+        $sql = "SELECT cut.*, u.username, u.full_name, u.role, u.status
+                FROM campaign_user_targets cut
+                INNER JOIN users u ON u.id = cut.user_id
+                WHERE cut.campaign_id = ?
+                ORDER BY cut.id ASC";
+        if ($db_type === 'pdo') {
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([$campaign_id]);
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $campaign_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $rows = [];
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+        return $rows;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+function saveCampaignUserTargets($campaign_id, $targets) {
+    global $conn, $db_type;
+    if (!$conn || !$campaign_id) return false;
+    if (!ensureCampaignUserTargetsTable()) return false;
+
+    try {
+        if (!beginDbTransaction()) return false;
+
+        if ($db_type === 'pdo') {
+            $deleteStmt = $conn->prepare("DELETE FROM campaign_user_targets WHERE campaign_id = ?");
+            $deleteStmt->execute([$campaign_id]);
+
+            if (!empty($targets)) {
+                $insertStmt = $conn->prepare("INSERT INTO campaign_user_targets (campaign_id, user_id, lead_target) VALUES (?, ?, ?)");
+                foreach ($targets as $target) {
+                    $insertStmt->execute([$campaign_id, (int)$target['user_id'], (int)$target['lead_target']]);
+                }
+            }
+        } else {
+            $deleteStmt = $conn->prepare("DELETE FROM campaign_user_targets WHERE campaign_id = ?");
+            $deleteStmt->bind_param("i", $campaign_id);
+            $deleteStmt->execute();
+
+            if (!empty($targets)) {
+                $insertStmt = $conn->prepare("INSERT INTO campaign_user_targets (campaign_id, user_id, lead_target) VALUES (?, ?, ?)");
+                foreach ($targets as $target) {
+                    $user_id = (int)$target['user_id'];
+                    $lead_target = (int)$target['lead_target'];
+                    $insertStmt->bind_param("iii", $campaign_id, $user_id, $lead_target);
+                    $insertStmt->execute();
+                }
+            }
+        }
+
+        commitDbTransaction();
+        return true;
+    } catch (Exception $e) {
+        rollbackDbTransaction();
+        return false;
+    }
+}
+
+function assignLeadsByCampaignTarget($campaign_id, $lead_ids, $assigned_by = null) {
+    global $conn, $db_type;
+    if (!$conn || !$campaign_id || empty($lead_ids)) {
+        return [
+            'success' => true,
+            'configured' => false,
+            'assigned_count' => 0,
+            'unassigned_count' => 0
+        ];
+    }
+
+    if (!ensureLeadAssignmentsTable()) {
+        return [
+            'success' => false,
+            'configured' => true,
+            'assigned_count' => 0,
+            'unassigned_count' => count($lead_ids)
+        ];
+    }
+
+    $targets = getCampaignUserTargets($campaign_id);
+    if (empty($targets)) {
+        return [
+            'success' => true,
+            'configured' => false,
+            'assigned_count' => 0,
+            'unassigned_count' => count(array_unique(array_map('intval', $lead_ids)))
+        ];
+    }
+
+    $normalized_lead_ids = [];
+    foreach ($lead_ids as $lead_id) {
+        $lead_id = (int)$lead_id;
+        if ($lead_id > 0 && !in_array($lead_id, $normalized_lead_ids, true)) {
+            $normalized_lead_ids[] = $lead_id;
+        }
+    }
+
+    if (empty($normalized_lead_ids)) {
+        return [
+            'success' => true,
+            'configured' => true,
+            'assigned_count' => 0,
+            'unassigned_count' => 0
+        ];
+    }
+
+    $assignment_queue = [];
+    foreach ($targets as $target) {
+        $user_id = (int)($target['user_id'] ?? 0);
+        $lead_target = (int)($target['lead_target'] ?? 0);
+        if ($user_id <= 0 || $lead_target <= 0) {
+            continue;
+        }
+        for ($i = 0; $i < $lead_target; $i++) {
+            $assignment_queue[] = $user_id;
+        }
+    }
+
+    try {
+        if (!beginDbTransaction()) {
+            return [
+                'success' => false,
+                'configured' => true,
+                'assigned_count' => 0,
+                'unassigned_count' => count($normalized_lead_ids)
+            ];
+        }
+
+        $assigned_count = 0;
+
+        if ($db_type === 'pdo') {
+            $updateStmt = $conn->prepare("UPDATE leads SET assigned_to = ? WHERE id = ?");
+            $insertStmt = $conn->prepare("INSERT INTO lead_assignments (lead_id, user_id, assigned_by, source) VALUES (?, ?, ?, 'campaign_auto')
+                ON DUPLICATE KEY UPDATE assigned_by = VALUES(assigned_by), source = VALUES(source), assigned_at = CURRENT_TIMESTAMP");
+        } else {
+            $updateStmt = $conn->prepare("UPDATE leads SET assigned_to = ? WHERE id = ?");
+            $insertStmt = $conn->prepare("INSERT INTO lead_assignments (lead_id, user_id, assigned_by, source) VALUES (?, ?, ?, 'campaign_auto')
+                ON DUPLICATE KEY UPDATE assigned_by = VALUES(assigned_by), source = VALUES(source), assigned_at = CURRENT_TIMESTAMP");
+        }
+
+        foreach ($normalized_lead_ids as $index => $lead_id) {
+            $assignee = $assignment_queue[$index] ?? null;
+
+            if ($db_type === 'pdo') {
+                $updateStmt->execute([$assignee, $lead_id]);
+            } else {
+                if ($assignee === null) {
+                    $nullUpdateStmt = $conn->prepare("UPDATE leads SET assigned_to = NULL WHERE id = ?");
+                    $nullUpdateStmt->bind_param("i", $lead_id);
+                    $nullUpdateStmt->execute();
+                } else {
+                    $updateStmt->bind_param("ii", $assignee, $lead_id);
+                    $updateStmt->execute();
+                }
+            }
+
+            if (!empty($assignee)) {
+                if ($db_type === 'pdo') {
+                    $insertStmt->execute([$lead_id, $assignee, $assigned_by]);
+                } else {
+                    $insertStmt->bind_param("iii", $lead_id, $assignee, $assigned_by);
+                    $insertStmt->execute();
+                }
+                $assigned_count++;
+            }
+        }
+
+        commitDbTransaction();
+
+        return [
+            'success' => true,
+            'configured' => true,
+            'assigned_count' => $assigned_count,
+            'unassigned_count' => count($normalized_lead_ids) - $assigned_count
+        ];
+    } catch (Exception $e) {
+        rollbackDbTransaction();
+        return [
+            'success' => false,
+            'configured' => true,
+            'assigned_count' => 0,
+            'unassigned_count' => count($normalized_lead_ids)
+        ];
     }
 }
 
@@ -669,6 +1022,9 @@ function updateLead($id, $lead_data) {
             $stmt = $conn->prepare($sql);
             $result = $stmt->execute($params);
             if ($result) {
+                if (array_key_exists('assigned_to', $lead_data) && !empty($lead_data['assigned_to'])) {
+                    addLeadAssignment($id, (int)$lead_data['assigned_to'], $_SESSION['user_id'] ?? null, 'manual');
+                }
                 logLeadActivity($id, $_SESSION['user_id'] ?? 0, 'updated', "Lead details updated");
             }
             return $result;
@@ -697,6 +1053,9 @@ function updateLead($id, $lead_data) {
             call_user_func_array([$stmt, 'bind_param'], $refs);
             $result = $stmt->execute();
             if ($result) {
+                if (array_key_exists('assigned_to', $lead_data) && !empty($lead_data['assigned_to'])) {
+                    addLeadAssignment($id, (int)$lead_data['assigned_to'], $_SESSION['user_id'] ?? null, 'manual');
+                }
                 logLeadActivity($id, $_SESSION['user_id'] ?? 0, 'updated', "Lead details updated");
             }
             return $result;
@@ -1945,18 +2304,28 @@ function saveLeadCustomData($lead_id, $custom_data) {
         
         if ($db_type === 'pdo') {
             $stmt = $conn->prepare($sql);
-            $conn->beginTransaction();
+            $started_transaction = !$conn->inTransaction();
+            if ($started_transaction) {
+                $conn->beginTransaction();
+            }
             foreach ($custom_data as $data) {
                 if (isset($data['field_id'])) {
                     $stmt->execute([$lead_id, $data['field_id'], $data['value'] ?? '']);
                 }
             }
-            $conn->commit();
+            if ($started_transaction) {
+                $conn->commit();
+            }
             return true;
         } else {
             $stmt = $conn->prepare($sql);
             if ($stmt === false) return false;
-            $conn->begin_transaction();
+            $started_transaction = true;
+            if (property_exists($conn, 'server_status') && ($conn->server_status & MYSQLI_SERVER_STATUS_IN_TRANS)) {
+                $started_transaction = false;
+            } else {
+                $conn->begin_transaction();
+            }
             foreach ($custom_data as $data) {
                 if (isset($data['field_id'])) {
                     $val = $data['value'] ?? '';
@@ -1964,12 +2333,14 @@ function saveLeadCustomData($lead_id, $custom_data) {
                     $stmt->execute();
                 }
             }
-            $conn->commit();
+            if ($started_transaction) {
+                $conn->commit();
+            }
             return true;
         }
     } catch (Exception $e) {
-        if ($db_type === 'pdo' && $conn->inTransaction()) $conn->rollBack();
-        elseif ($db_type === 'mysqli') $conn->rollback();
+        if ($db_type === 'pdo' && isset($started_transaction) && $started_transaction && $conn->inTransaction()) $conn->rollBack();
+        elseif ($db_type === 'mysqli' && isset($started_transaction) && $started_transaction) $conn->rollback();
         return false;
     }
 }

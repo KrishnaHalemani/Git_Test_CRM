@@ -113,7 +113,7 @@ switch($action) {
         $assigned_to = intval($_POST['assigned_to'] ?? 0);
         
         if ($lead_id && $assigned_to) {
-            $ok = updateLead($lead_id, ['assigned_to' => $assigned_to]);
+            $ok = updateLeadAssignee($lead_id, $assigned_to, $_SESSION['user_id'], 'reassigned');
             if ($ok) header('Location: leads_advanced.php?success=reassigned');
             else header('Location: leads_advanced.php?error=reassign_failed');
         } else header('Location: leads_advanced.php?error=invalid_data');

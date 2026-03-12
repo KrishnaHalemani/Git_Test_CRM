@@ -87,6 +87,7 @@ if ($ext === 'csv') {
 $success_count = 0;
 $failed_count = 0;
 $updated_count = 0;
+$processed_lead_ids = [];
 
 foreach ($rows as $row) {
     // Skip empty rows
@@ -97,7 +98,6 @@ foreach ($rows as $row) {
         // Keep a schema-safe default; campaign identity is tracked via campaign_id/lead_campaigns.
         'source' => 'import',
         'created_by' => $_SESSION['user_id'],
-        'assigned_to' => $_SESSION['user_id'], // Default assign to importer
         'status' => 'new'
     ];
     $custom_data = [];
@@ -195,7 +195,9 @@ foreach ($rows as $row) {
         }
     } else {
         // Create New Lead
-        $lead_id = addLead($lead_data);
+        $create_lead_data = $lead_data;
+        $create_lead_data['assigned_to'] = null;
+        $lead_id = addLead($create_lead_data);
         if ($lead_id) {
             $success_count++;
         } else {
@@ -219,12 +221,27 @@ foreach ($rows as $row) {
     if ($lead_id && !empty($custom_data)) {
         saveLeadCustomData($lead_id, $custom_data);
     }
+
+    if ($lead_id) {
+        $processed_lead_ids[] = $lead_id;
+    }
 }
+
+$assignment_summary = assignLeadsByCampaignTarget($campaign_id, $processed_lead_ids, $_SESSION['user_id']);
 
 // Cleanup
 @unlink($filepath);
 
 $msg = "Import Completed. Created: $success_count, Updated: $updated_count, Failed: $failed_count";
+if (!empty($assignment_summary['configured'])) {
+    $msg .= ", Auto Assigned: " . (int)$assignment_summary['assigned_count'] . ", Left Unassigned: " . (int)$assignment_summary['unassigned_count'];
+} elseif (!empty($processed_lead_ids)) {
+    $msg .= ", Assignment: Not configured";
+}
+
+if (empty($assignment_summary['success'])) {
+    $_SESSION['error_message'] = "Import completed, but campaign lead assignment failed. Please review assignment configuration and try again.";
+}
 
 // Log to system activity
 if (function_exists('logSystemActivity')) {

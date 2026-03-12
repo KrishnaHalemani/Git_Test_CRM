@@ -76,11 +76,20 @@ switch ($action) {
             'estimated_value' => $_POST['estimated_value'] ?? $lead['estimated_value'],
             'campaign_id' => !empty($_POST['campaign_id']) ? (int)$_POST['campaign_id'] : $lead['campaign_id']
         ];
-        if ($role !== 'user' && !empty($_POST['assigned_to'])) {
-            $update_data['assigned_to'] = $_POST['assigned_to'];
+        $requested_assigned_to = ($role !== 'user' && !empty($_POST['assigned_to'])) ? (int)$_POST['assigned_to'] : null;
+
+        if (!beginDbTransaction()) {
+            echo json_encode(['success' => false, 'message' => 'Failed to start update transaction.']);
+            exit;
         }
 
         if (updateLead($lead_id, $update_data)) {
+            if ($requested_assigned_to !== null && !updateLeadAssignee($lead_id, $requested_assigned_to, $user_id, 'manual', false)) {
+                rollbackDbTransaction();
+                echo json_encode(['success' => false, 'message' => 'Failed to update lead assignment.']);
+                exit;
+            }
+
             // Handle custom fields
             $custom_data = [];
             foreach ($_POST as $key => $value) {
@@ -89,13 +98,17 @@ switch ($action) {
                     $custom_data[] = ['field_id' => $field_id, 'value' => $value];
                 }
             }
-            if (!empty($custom_data) && function_exists('saveLeadCustomData')) {
-                saveLeadCustomData($lead_id, $custom_data);
+            if (!empty($custom_data) && function_exists('saveLeadCustomData') && !saveLeadCustomData($lead_id, $custom_data)) {
+                rollbackDbTransaction();
+                echo json_encode(['success' => false, 'message' => 'Failed to save custom field data.']);
+                exit;
             }
 
+            commitDbTransaction();
             logLeadActivity($lead_id, $user_id, 'updated', "Lead details updated.");
             echo json_encode(['success' => true]);
         } else {
+            rollbackDbTransaction();
             echo json_encode(['success' => false, 'message' => 'Failed to update lead.']);
         }
         break;
